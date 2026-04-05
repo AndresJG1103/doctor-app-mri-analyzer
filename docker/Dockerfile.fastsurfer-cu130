@@ -1,0 +1,87 @@
+# =============================================================================
+# FastSurfer with PyTorch CUDA 13.0 Support
+# =============================================================================
+# Custom build for NVIDIA drivers 590+ / CUDA 13.x
+#
+# Build: docker build -t fastsurfer-cu130 -f docker/Dockerfile.fastsurfer-cu130 .
+# =============================================================================
+
+FROM nvidia/cuda:12.6.0-runtime-ubuntu22.04
+
+LABEL maintainer="MRI Report Team"
+LABEL description="FastSurfer with PyTorch CUDA 13.0 support"
+
+# Prevent interactive prompts
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3.10 \
+    python3.10-venv \
+    python3-pip \
+    git \
+    wget \
+    ca-certificates \
+    libgomp1 \
+    libglib2.0-0 \
+    libsm6 \
+    libxext6 \
+    libxrender-dev \
+    libgl1-mesa-glx \
+    && rm -rf /var/lib/apt/lists/* \
+    && apt-get clean
+
+# Set Python 3.10 as default
+RUN update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.10 1 \
+    && update-alternatives --install /usr/bin/python python /usr/bin/python3.10 1
+
+# Create virtual environment
+RUN python3 -m venv /venv
+ENV PATH="/venv/bin:$PATH"
+
+# Upgrade pip
+RUN pip install --no-cache-dir --upgrade pip setuptools wheel
+
+# Install PyTorch with CUDA 13.0 support
+RUN pip install --no-cache-dir \
+    torch \
+    torchvision \
+    --index-url https://download.pytorch.org/whl/cu130
+
+# Install FastSurfer dependencies
+RUN pip install --no-cache-dir \
+    numpy \
+    scipy \
+    nibabel \
+    h5py \
+    yacs \
+    matplotlib \
+    pillow \
+    pyyaml \
+    scikit-image \
+    simpleitk
+
+# Clone FastSurfer
+WORKDIR /
+RUN git clone --branch stable https://github.com/Deep-MI/FastSurfer.git /fastsurfer
+
+# Install FastSurfer Python package
+WORKDIR /fastsurfer
+RUN pip install --no-cache-dir -e .
+
+# Create directories
+RUN mkdir -p /data/input /data/output /data/licenses
+
+# Set environment variables
+ENV FASTSURFER_HOME=/fastsurfer
+ENV PYTHONPATH=/fastsurfer:$PYTHONPATH
+
+# Verify installation
+RUN python -c "import torch; print(f'PyTorch: {torch.__version__}'); print(f'CUDA available: {torch.cuda.is_available()}')"
+
+# Set entrypoint to FastSurfer run script
+WORKDIR /fastsurfer
+ENTRYPOINT ["python3", "/fastsurfer/run_fastsurfer.py"]
+
+# Default command (show help)
+CMD ["--help"]

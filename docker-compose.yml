@@ -1,0 +1,121 @@
+version: '3.8'
+
+services:
+  # =============================================================================
+  # FastAPI Application
+  # =============================================================================
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: mri-report-api
+    ports:
+      - "${PORT:-8000}:8000"
+    volumes:
+      - ./data:/data
+      - ./src:/app/src:ro
+      - ./assets:/app/assets:ro
+    environment:
+      - PROJECT_NAME=${PROJECT_NAME:-MRI Report API}
+      - API_V1_STR=${API_V1_STR:-/api/v1}
+      - HOST=0.0.0.0
+      - PORT=8000
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_DB=0
+      - DATA_INPUT_DIR=/data/input
+      - DATA_OUTPUT_DIR=/data/output
+      - FREESURFER_LICENSE_PATH=/data/licenses/license.txt
+      - FASTSURFER_IMAGE=${FASTSURFER_IMAGE:-deepmi/fastsurfer:latest}
+      - FASTSURFER_USE_GPU=${FASTSURFER_USE_GPU:-false}
+      - FASTSURFER_DEVICE=${FASTSURFER_DEVICE:-cpu}
+      - FASTSURFER_THREADS=${FASTSURFER_THREADS:-4}
+      - MAX_UPLOAD_SIZE=${MAX_UPLOAD_SIZE:-524288000}
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - mri-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+
+  # =============================================================================
+  # Worker for MRI Processing
+  # =============================================================================
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: mri-report-worker
+    command: python -m app.workers.mri_worker
+    volumes:
+      - ./data:/data
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_DB=0
+      - DATA_INPUT_DIR=/data/input
+      - DATA_OUTPUT_DIR=/data/output
+      - FREESURFER_LICENSE_PATH=/data/licenses/license.txt
+      - FASTSURFER_IMAGE=${FASTSURFER_IMAGE:-deepmi/fastsurfer:latest}
+      - FASTSURFER_USE_GPU=${FASTSURFER_USE_GPU:-false}
+      - FASTSURFER_DEVICE=${FASTSURFER_DEVICE:-cpu}
+      - FASTSURFER_THREADS=${FASTSURFER_THREADS:-4}
+      - DOCKER_CONTAINER=true
+      # HOST_DATA_PATH should be the absolute path on the Docker host
+      # This is needed because worker uses Docker-in-Docker
+      - HOST_DATA_PATH=${HOST_DATA_PATH:-${PWD}/data}
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - mri-network
+    # Required for GPU support - uncomment if using GPU
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    restart: unless-stopped
+
+  # =============================================================================
+  # Redis - Message Queue
+  # =============================================================================
+  redis:
+    image: redis:7-alpine
+    container_name: mri-report-redis
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes
+    networks:
+      - mri-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+# =============================================================================
+# Networks
+# =============================================================================
+networks:
+  mri-network:
+    driver: bridge
+
+# =============================================================================
+# Volumes
+# =============================================================================
+volumes:
+  redis_data:
+    driver: local
